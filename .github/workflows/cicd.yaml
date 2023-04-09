@@ -1,0 +1,50 @@
+name: CI-CD Lambda function
+
+on: [push]
+
+jobs:
+  CI-CD2Lambda:
+    runs-on: ubuntu-latest
+      
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v3
+
+      - name: AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{secrets.AWS_GITHUB_ROLE_ARN}}
+          aws-region: us-east-1
+
+      - name: Terraform Init
+        id: init
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+      
+      - name: set_variables
+        id: variables
+        run: |
+            terraform init
+            echo "bucket_name="$(terraform output -raw bucket_name) >> $GITHUB_OUTPUT
+            echo "lambda_function="$(terraform output -raw lambda_function) >> $GITHUB_OUTPUT
+
+      - name: ZIP build
+        run: zip ${{ github.run_id }}.zip ${{ steps.variables.outputs.lambda_function }}.js
+
+      - name: Upload to S3
+        run: aws s3 cp ${{ github.run_id }}.zip s3://${{ steps.variables.outputs.bucket_name }}/${{ github.run_id }}.zip
+
+      - name: Update lambda function code
+        run: aws lambda update-function-code --function-name ${{ steps.variables.outputs.lambda_function }} --s3-bucket ${{ steps.variables.outputs.bucket_name }} --s3-key ${{ github.run_id }}.zip
+
+      - name: Sleep for 5 seconds
+        run: sleep 5s
+        shell: bash
+
+      - name: Release lambda function version
+        run: aws lambda publish-version --function-name ${{ steps.variables.outputs.lambda_function }} --description ${{ github.run_id }}
